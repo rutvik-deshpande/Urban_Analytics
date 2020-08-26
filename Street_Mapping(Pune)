@@ -1,0 +1,189 @@
+import pandas as pd
+import numpy as np
+import folium
+import shapely.affinity
+from shapely.geometry import Point
+import geopy
+import geopy.distance
+from plotnine import *
+import geopandas
+from geopandas import GeoDataFrame
+import gdal
+import fiona
+%matplotlib inline
+
+shp_path = ('Downloads/gis_osm_roads_free_1.shp')
+
+roads = GeoDataFrame.from_file(shp_path, encoding='utf-8')
+roads.head()
+
+center = [18.52,73.85]
+top = 18.70
+bottom = 18.34
+left = 73.68
+right = 74.0
+
+
+# create an ellipse
+radius_lat = geopy.distance.distance(kilometers = 21).destination(point=center, bearing=0)[0] - center[0]
+radius_lon = geopy.distance.distance(kilometers = 17).destination(point=center, bearing=90)[1] - center[1]
+
+circle = Point(center[::-1]).buffer(1)
+ellipse = shapely.affinity.scale(circle, radius_lon, radius_lat)
+
+ellipse_map = folium.Map(location=center, zoom_start=10, tiles='CartoDB positron')
+
+folium.PolyLine(list([c[::-1] for c in ellipse.exterior.coords])).add_to(ellipse_map)
+
+ellipse_map
+
+pune = roads.loc[roads['geometry'].apply(lambda g: ellipse.contains(g))].copy()
+pune.shape
+
+pune = pune[pune.fclass.isin(['trunk', 'primary']) | pune['name'].notnull()]
+pune['name'] = pune['name'].fillna(value='')
+pune.shape
+
+pune['prefix'] = pune['name'].apply(lambda name: name.split(' ')[0] if name is not None else None)
+pune['postfix'] = pune['name'].apply(lambda name: name.split(' ')[-1] if name is not None else None)
+
+pune['postfix'].unique()
+
+print(pune.postfix.value_counts())
+
+def get_designation(name):
+    if 'Bypass' in name: 
+     return 'Bypass'
+    elif ' Path' in name: 
+     return 'Path'
+    elif 'Road' in name: 
+     return 'Road'
+    elif 'Drive' in name:
+     return 'Drive'
+    elif 'Street' in name:
+     return 'Street'
+    elif 'Diversion' in name:
+     return 'Diversion'
+    elif 'Bridge' in name:
+     return 'Bridge'
+    elif 'Circle' in name:
+     return 'Circle'
+    elif 'Lane' in name:
+     return 'Lane'
+    elif 'Flyover' in name:
+     return 'Flyover'
+    elif 'Highway' in name:
+     return 'Highway'
+    elif 'Diversion' in name:
+     return 'Diversion'
+    elif any(ext in name for ext in ['Ali', 'Separator', 'Pul', 'Bol', 'Marg', 'रस्ता', 'मार्ग']):
+     return 'Pass' 
+    else: 
+     return 'Way'
+     
+     
+pune['designation'] = [get_designation(name) for name in pune['name']]
+
+pune.designation.value_counts()
+
+colors = {
+    'Road': '#2470d4',        
+    'Bypass': '#59c8e5',
+    'Path': '#59c8e5',
+    'Way': '#fed032',
+    'Bridge': '#fec301',
+    'Lane': '#fe4d64',
+    'Diversion': '#ffb366',
+    'Highway': '#ff9223',
+    'Flyover': '#0a7abf',
+    'Street': '#4cb580',
+    'Drive': '#2e968c',
+    'Circle': '#cccccc',
+    'Pass': '#e67300'
+}
+
+
+
+names_english = {
+    'Road': 'Road',
+    'Bypass': 'Bypass',
+    'Path': 'Path',
+    'Way': 'Way',
+    'Bridge': 'Bridge',
+    'Lane': 'Lane',
+    'Highway': 'Highway',
+    'Diversion': 'Diversion',
+    'Flyover': 'Flyover',
+    'Street': 'Street',    
+    'Drive': 'Drive',
+    'Circle': 'Circle',
+    'Pass': 'Pass'
+}
+
+import math
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import numpy as np
+
+def plot_and_save(
+    top,
+    bottom,
+    left,
+    right,
+    linewidth,
+    linewidth_lane,
+    legend_title,
+    legend_bbox,
+    path,
+    english=False,
+    dpi=300
+    ):
+    
+    f, ax = plt.subplots(1, figsize=(15, 15))
+
+    pune.plot(ax=ax,
+                color=[colors[d] for d in pune.designation],
+                linewidth=[linewidth if d != 'Road' else linewidth_lane for d in pune.designation])
+    ax.set_aspect(1/math.cos(math.pi/180*center[0]))
+    ax.set_ylim((bottom, top))
+    ax.set_xlim((left, right))
+
+    plt.axis('off')
+    
+    plt.legend(handles=[mpatches.Patch(color=colors[k], 
+                                       label=f'{names_english[k]}' if english else k) for k in colors],
+               loc='center right',
+               fontsize='large',
+               edgecolor='none',
+               title=legend_title,
+               title_fontsize='xx-large',
+               bbox_to_anchor=legend_bbox)
+
+    plt.savefig(path, bbox_inches='tight', dpi=dpi)
+    
+    
+plot_and_save(top,
+              bottom,
+              left,
+              right,
+              1,
+              0.7,
+              'Pune',
+              (1.25, 0.1),
+              'Downloads/pune.png')
+              
+
+streets_map = folium.Map(location=center, zoom_start=10, tiles='CartoDB positron')
+
+for i, street in pune.iterrows():
+    weight = 2
+    if 'Road' in street['name']:
+        weight = 1    
+    folium.PolyLine(
+        [c[::-1] for c in street.geometry.coords],
+        color=colors[street['designation']],
+        popup=street['name'],
+        weight=weight
+        ).add_to(streets_map)
+
+streets_map.save('Downloads/index.html')
